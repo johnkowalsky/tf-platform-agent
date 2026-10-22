@@ -1,0 +1,81 @@
+{
+    "failed_checks": [
+        {
+            "file": "/data-factory/main.tf",
+            "findings": [
+                {
+                    "resource": "azurerm_data_factory.this",
+                    "check_ids": [
+                        "CKV2_AZURE_15",
+                        "CKV_AZURE_103",
+                        "CKV_AZURE_104"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "/databricks-workspace/main.tf",
+            "findings": [
+                {
+                    "resource": "azurerm_databricks_workspace.this",
+                    "check_ids": [
+                        "CKV2_AZURE_48",
+                        "CKV_AZURE_158"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "/function-app/main.tf",
+            "findings": [
+                {
+                    "resource": "azurerm_linux_function_app.this",
+                    "check_ids": [
+                        "CKV_AZURE_221"
+                    ]
+                },
+                {
+                    "resource": "azurerm_service_plan.this",
+                    "check_ids": [
+                        "CKV_AZURE_212",
+                        "CKV_AZURE_225"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "/key-vault/main.tf",
+            "findings": [
+                {
+                    "resource": "azurerm_key_vault.this",
+                    "check_ids": [
+                        "CKV2_AZURE_32",
+                        "CKV_AZURE_189"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "/storage-account/main.tf",
+            "findings": [
+                {
+                    "resource": "azurerm_storage_account.this",
+                    "check_ids": [
+                        "CKV2_AZURE_1",
+                        "CKV2_AZURE_33",
+                        "CKV_AZURE_206",
+                        "CKV_AZURE_244",
+                        "CKV_AZURE_33",
+                        "CKV_AZURE_59"
+                    ]
+                },
+                {
+                    "resource": "azurerm_storage_container.this",
+                    "check_ids": [
+                        "CKV2_AZURE_21"
+                    ]
+                }
+            ]
+        }
+    ]
+}

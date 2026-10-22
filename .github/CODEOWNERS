@@ -1,0 +1,4 @@
+# Replace REPLACE_WITH_GITHUB_LOGIN with the publisher's GitHub username or team
+# before enabling a ruleset that requires code-owner review.
+.github/ @REPLACE_WITH_GITHUB_LOGIN
+scripts/agent/ @REPLACE_WITH_GITHUB_LOGIN

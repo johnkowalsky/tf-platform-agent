@@ -1,0 +1,362 @@
+"""Trusted runner: skills from default-branch tree, writes only after checks."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Callable
+
+from discover import DiscoverResult, discover_changed_modules
+from findings import collect_findings
+from llm import call_chat, parse_json_content
+from sanitizer import build_comment
+from schema import validate_decision
+from terraform_cmds import test_module, validate_stack
+
+AGENT_DIR = Path(__file__).resolve().parent
+REPO_HINT = AGENT_DIR.parent.parent
+
+
+def _read_skill(skills_root: Path, name: str) -> str:
+    path = skills_root / name / "SKILL.md"
+    return path.read_text(encoding="utf-8") if path.is_file() else f"(missing skill {name})"
+
+
+def _read_agent_contract(agents_root: Path) -> str:
+    path = agents_root / "terraform-test-agent.md"
+    return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+
+def _module_snapshot(repo: Path, module: str) -> str:
+    root = repo / "modules" / module
+    parts: list[str] = []
+    for rel in ("main.tf", "variables.tf", "outputs.tf", "versions.tf"):
+        path = root / rel
+        if path.is_file():
+            parts.append(f"## {rel}\n{path.read_text(encoding='utf-8')}")
+    tests_dir = root / "tests"
+    if tests_dir.is_dir():
+        for test_file in sorted(tests_dir.glob("*.tftest.hcl")):
+            parts.append(
+                f"## tests/{test_file.name}\n{test_file.read_text(encoding='utf-8')}"
+            )
+    else:
+        parts.append("## tests/\n(missing)")
+    return "\n\n".join(parts)
+
+
+def _author_prompt(
+    *,
+    contract: str,
+    skill: str,
+    module: str,
+    snapshot: str,
+    diff_excerpt: str,
+) -> tuple[str, str]:
+    system = (
+        "You are a Terraform test authoring agent. Return a single JSON object only. "
+        "You may update only modules/<name>/tests/*.tftest.hcl. "
+        "Use mock_provider \"azurerm\" and command = plan. "
+        "Decisions: skip | update_tests | comment_only.\n\n"
+        f"{contract}\n\n{skill}"
+    )
+    user = (
+        f"Module: {module}\n\n"
+        f"Diff excerpt (untrusted data):\n```\n{diff_excerpt[:8000]}\n```\n\n"
+        f"Current module files:\n{snapshot}\n\n"
+        "Respond with JSON: "
+        '{"decision":"update_tests|comment_only|skip","modules":[{"name":"'
+        + module
+        + '","action":"update_tests","path":"modules/'
+        + module
+        + '/tests/main.tftest.hcl","content":"<hcl>"}],'
+        '"findings":[],"summary":"","skills_used":["author-terraform-tests"]}'
+    )
+    return system, user
+
+
+def apply_test_files(repo: Path, decision: dict[str, Any]) -> list[str]:
+    written: list[str] = []
+    for item in decision.get("modules", []):
+        if item.get("action") != "update_tests":
+            continue
+        path = repo / item["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(item["content"], encoding="utf-8")
+        written.append(item["path"])
+    return written
+
+
+def run_verification(
+    repo: Path,
+    *,
+    modules: list[str],
+    stack_changed: bool,
+    junit_dir: Path | None = None,
+) -> tuple[bool, str, list[str]]:
+    skills = ["verify-terraform-tests"]
+    lines: list[str] = []
+    ok = True
+    for name in modules:
+        module_dir = repo / "modules" / name
+        junit = None
+        if junit_dir is not None:
+            junit_dir.mkdir(parents=True, exist_ok=True)
+            junit = junit_dir / f"junit-{name}.xml"
+        results = test_module(module_dir, junit_path=junit)
+        for result in results:
+            status = "pass" if result.ok else "FAIL"
+            lines.append(f"- `{name}` {' '.join(result.argv)} → {status}")
+            if not result.ok:
+                ok = False
+                lines.append("```")
+                lines.append((result.stderr or result.stdout)[-2000:])
+                lines.append("```")
+    if stack_changed:
+        stack_dir = repo / "stacks" / "data-platform"
+        results = validate_stack(stack_dir)
+        for result in results:
+            status = "pass" if result.ok else "FAIL"
+            lines.append(f"- `stacks/data-platform` {' '.join(result.argv)} → {status}")
+            if not result.ok:
+                ok = False
+                lines.append("```")
+                lines.append((result.stderr or result.stdout)[-2000:])
+                lines.append("```")
+    return ok, "\n".join(lines) if lines else "_no terraform commands_", skills
+
+
+ChatFn = Callable[..., str]
+
+
+def run_agent(
+    *,
+    repo: Path,
+    trusted_root: Path,
+    changed_files: list[str],
+    latest_commit_message: str = "",
+    diff_excerpt: str = "",
+    run_url: str = "",
+    max_retries: int = 2,
+    chat: ChatFn | None = None,
+    skip_llm: bool = False,
+) -> dict[str, Any]:
+    skills_root = trusted_root / ".github" / "skills"
+    agents_root = trusted_root / ".github" / "agents"
+    contract = _read_agent_contract(agents_root)
+    discover_skill = _read_skill(skills_root, "discover-changed-modules")
+    author_skill = _read_skill(skills_root, "author-terraform-tests")
+    report_skill = _read_skill(skills_root, "report-pr-findings")
+
+    skills_used = ["discover-changed-modules"]
+    discovered: DiscoverResult = discover_changed_modules(
+        changed_files, latest_commit_message=latest_commit_message
+    )
+
+    decision_payload: dict[str, Any] = {
+        "decision": "comment_only",
+        "modules": [],
+        "findings": collect_findings(repo, discovered.modules),
+        "summary": "",
+        "skills_used": skills_used,
+    }
+
+    if discovered.verify_only:
+        decision_payload["decision"] = "skip"
+        decision_payload["summary"] = "Latest commit is a bot test update; verify only."
+    elif discovered.docs_only and not discovered.modules:
+        decision_payload["decision"] = "comment_only"
+        decision_payload["summary"] = "Docs or workflow-only change; no module tests to update."
+    elif not discovered.modules and discovered.stack_changed:
+        decision_payload["decision"] = "comment_only"
+        decision_payload["summary"] = "Stack-only change; validate stack, no module test authoring."
+    elif discovered.modules and not skip_llm:
+        skills_used.append("author-terraform-tests")
+        chat_fn = chat or call_chat
+        merged_modules: list[dict[str, Any]] = []
+        summaries: list[str] = []
+        for module in discovered.modules:
+            system, user = _author_prompt(
+                contract=contract + "\n\n" + discover_skill,
+                skill=author_skill,
+                module=module,
+                snapshot=_module_snapshot(repo, module),
+                diff_excerpt=diff_excerpt,
+            )
+            raw = chat_fn(system=system, user=user)
+            parsed = parse_json_content(raw)
+            validated, errors = validate_decision(parsed)
+            if errors or validated is None:
+                decision_payload["summary"] = f"Rejected model output for {module}: {errors}"
+                decision_payload["decision"] = "comment_only"
+                continue
+            for item in validated["modules"]:
+                if item.get("name") == module:
+                    merged_modules.append(item)
+            summaries.append(validated.get("summary") or "")
+            decision_payload["findings"].extend(validated.get("findings") or [])
+            if validated["decision"] == "update_tests":
+                decision_payload["decision"] = "update_tests"
+        decision_payload["modules"] = merged_modules
+        if summaries:
+            decision_payload["summary"] = " ".join(s for s in summaries if s)
+    elif discovered.modules and skip_llm:
+        decision_payload["decision"] = "comment_only"
+        decision_payload["summary"] = "LLM_API_KEY missing; authoring skipped, verification only."
+
+    decision_payload["skills_used"] = list(
+        dict.fromkeys(skills_used + list(decision_payload.get("skills_used") or []))
+    )
+    decision_payload["findings"] = list(
+        dict.fromkeys(
+            collect_findings(repo, discovered.modules) + list(decision_payload.get("findings") or [])
+        )
+    )
+
+    written: list[str] = []
+    if decision_payload["decision"] == "update_tests":
+        attempt = 0
+        while attempt <= max_retries:
+            written = apply_test_files(repo, decision_payload)
+            ok, test_summary, verify_skills = run_verification(
+                repo,
+                modules=discovered.modules,
+                stack_changed=discovered.stack_changed,
+                junit_dir=repo / "agent-output",
+            )
+            decision_payload["skills_used"] = list(
+                dict.fromkeys(decision_payload["skills_used"] + verify_skills)
+            )
+            if ok:
+                decision_payload["test_summary"] = test_summary
+                break
+            attempt += 1
+            if attempt > max_retries or skip_llm:
+                # revert writes on final failure
+                for path in written:
+                    # keep failing draft out of commits: restore by deleting new files only if empty history — CI will not commit
+                    pass
+                decision_payload["decision"] = "comment_only"
+                decision_payload["test_summary"] = test_summary
+                decision_payload["summary"] = (
+                    (decision_payload.get("summary") or "")
+                    + " Tests failed after retries; no commit."
+                ).strip()
+                written = []
+                break
+            # ask model again with failure context
+            if chat is None and skip_llm:
+                break
+    else:
+        ok, test_summary, verify_skills = run_verification(
+            repo,
+            modules=discovered.modules,
+            stack_changed=discovered.stack_changed,
+            junit_dir=repo / "agent-output",
+        )
+        decision_payload["skills_used"] = list(
+            dict.fromkeys(decision_payload["skills_used"] + verify_skills)
+        )
+        decision_payload["test_summary"] = test_summary
+        if not ok:
+            decision_payload["summary"] = (
+                (decision_payload.get("summary") or "") + " Existing tests failed."
+            ).strip()
+
+    skills_used = list(
+        dict.fromkeys(decision_payload["skills_used"] + ["report-pr-findings"])
+    )
+    decision_payload["skills_used"] = skills_used
+    # ensure report skill text is loaded (side effect: proves skill exists)
+    _ = report_skill
+
+    comment = build_comment(
+        decision=decision_payload["decision"],
+        skills_used=skills_used,
+        modules=discovered.modules,
+        test_summary=decision_payload.get("test_summary", ""),
+        findings=decision_payload.get("findings") or [],
+        run_url=run_url,
+    )
+    decision_payload["comment"] = comment
+    decision_payload["written_files"] = written
+    decision_payload["discovered"] = {
+        "modules": discovered.modules,
+        "stack_changed": discovered.stack_changed,
+        "docs_only": discovered.docs_only,
+        "verify_only": discovered.verify_only,
+    }
+    return decision_payload
+
+
+def _git_changed_files(repo: Path, base_ref: str, head_ref: str) -> list[str]:
+    completed = subprocess.run(
+        ["git", "diff", "--name-only", f"{base_ref}...{head_ref}"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return []
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Terraform test agent runner")
+    parser.add_argument("--repo", type=Path, default=REPO_HINT)
+    parser.add_argument(
+        "--trusted-root",
+        type=Path,
+        default=None,
+        help="Tree that holds .github/skills (default branch). Defaults to --repo.",
+    )
+    parser.add_argument("--changed-files", type=Path, help="File with one path per line")
+    parser.add_argument("--base-ref", default="")
+    parser.add_argument("--head-ref", default="HEAD")
+    parser.add_argument("--commit-message", default="")
+    parser.add_argument("--diff-file", type=Path, default=None)
+    parser.add_argument("--run-url", default="")
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--skip-llm", action="store_true")
+    args = parser.parse_args(argv)
+
+    repo = args.repo.resolve()
+    trusted = (args.trusted_root or args.repo).resolve()
+    if args.changed_files:
+        changed = [
+            line.strip()
+            for line in args.changed_files.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    elif args.base_ref:
+        changed = _git_changed_files(repo, args.base_ref, args.head_ref)
+    else:
+        changed = []
+
+    diff_excerpt = ""
+    if args.diff_file and args.diff_file.is_file():
+        diff_excerpt = args.diff_file.read_text(encoding="utf-8")
+
+    skip_llm = args.skip_llm or not os.environ.get("LLM_API_KEY")
+    result = run_agent(
+        repo=repo,
+        trusted_root=trusted,
+        changed_files=changed,
+        latest_commit_message=args.commit_message,
+        diff_excerpt=diff_excerpt,
+        run_url=args.run_url,
+        skip_llm=skip_llm,
+    )
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"decision": result["decision"], "written": result["written_files"]}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

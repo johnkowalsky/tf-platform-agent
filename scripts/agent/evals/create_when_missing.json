@@ -1,0 +1,14 @@
+{
+  "decision": "update_tests",
+  "modules": [
+    {
+      "name": "log-analytics-workspace",
+      "action": "update_tests",
+      "path": "modules/log-analytics-workspace/tests/main.tftest.hcl",
+      "content": "mock_provider \"azurerm\" {}\n\nvariables {\n  name = \"log-tp-test\"\n  resource_group_name = \"rg-test\"\n  location = \"westeurope\"\n}\n\nrun \"names_the_workspace\" {\n  command = plan\n  assert {\n    condition     = azurerm_log_analytics_workspace.this.name == \"log-tp-test\"\n    error_message = \"name mismatch\"\n  }\n}\n"
+    }
+  ],
+  "findings": [],
+  "summary": "Created missing tests for log-analytics-workspace.",
+  "skills_used": ["author-terraform-tests"]
+}

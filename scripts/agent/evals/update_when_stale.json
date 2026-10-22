@@ -1,0 +1,16 @@
+{
+  "decision": "update_tests",
+  "modules": [
+    {
+      "name": "function-app",
+      "action": "update_tests",
+      "path": "modules/function-app/tests/main.tftest.hcl",
+      "content": "mock_provider \"azurerm\" {}\n\nvariables {\n  name = \"func-tp-test\"\n  resource_group_name = \"rg-test\"\n  location = \"westeurope\"\n  storage_account_name = \"sttptest001\"\n  storage_account_id = \"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Storage/storageAccounts/sttptest001\"\n}\n\nrun \"ftps_state_is_disabled\" {\n  command = plan\n  assert {\n    condition     = azurerm_linux_function_app.this.site_config[0].ftps_state == \"Disabled\"\n    error_message = \"FTPS state must be Disabled after the change.\"\n  }\n}\n"
+    }
+  ],
+  "findings": [
+    "function-app: public_network_access_enabled defaults to true."
+  ],
+  "summary": "Updated FTPS assertion to Disabled.",
+  "skills_used": ["author-terraform-tests"]
+}

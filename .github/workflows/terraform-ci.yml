@@ -1,0 +1,106 @@
+# Secret-free PR checks. No LLM key. No Azure credentials.
+name: terraform-ci
+
+on:
+  pull_request:
+    paths:
+      - "modules/**"
+      - "stacks/data-platform/**"
+      - "scripts/agent/**"
+      - ".github/workflows/terraform-ci.yml"
+      - ".tflint.hcl"
+      - ".checkov.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "modules/**"
+      - "stacks/data-platform/**"
+      - "scripts/agent/**"
+
+permissions: {}
+
+concurrency:
+  group: terraform-ci-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      ARM_CLIENT_ID: ""
+      ARM_CLIENT_SECRET: ""
+      ARM_SUBSCRIPTION_ID: ""
+      ARM_TENANT_ID: ""
+      ARM_ACCESS_KEY: ""
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@cb605e52c26070c328afc4562f0b4ada7618a84e # v2.10.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.11.4
+          terraform_wrapper: false
+
+      - name: Setup Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+
+      - name: Fmt
+        run: terraform fmt -check -recursive
+
+      - name: Install TFLint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+          tflint --version
+
+      - name: TFLint modules
+        run: |
+          set -euo pipefail
+          for dir in modules/*; do
+            (cd "$dir" && tflint --init && tflint -f compact)
+          done
+
+      - name: Validate stack
+        working-directory: stacks/data-platform
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Test modules
+        run: |
+          set -euo pipefail
+          mkdir -p agent-output
+          for dir in modules/*; do
+            name=$(basename "$dir")
+            echo "==> $name"
+            (cd "$dir" && terraform init -backend=false && terraform test -junit-xml="../../agent-output/junit-${name}.xml")
+          done
+
+      - name: Agent unit tests
+        working-directory: scripts/agent
+        run: |
+          python -m pip install --require-hashes -r requirements.txt
+          PYTHONPATH=. python -m pytest -q tests/
+
+      - name: Checkov
+        run: |
+          python -m pip install 'checkov==3.2.334'
+          checkov -d modules -d stacks --framework terraform --config-file .checkov.yaml --baseline .checkov.baseline
+
+      - name: Upload JUnit
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: terraform-junit
+          path: agent-output/
