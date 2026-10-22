@@ -7,8 +7,6 @@ from pathlib import Path
 
 from runner import run_agent
 
-REPO = Path(__file__).resolve().parents[3]
-
 
 def test_cross_module_path_rejected_no_write(tmp_path: Path):
     # Minimal module tree
