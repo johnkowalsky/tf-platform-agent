@@ -192,5 +192,8 @@ overriding them in tests; runtime behavior of the Function App.
 ## Publish checklist
 
 See [SECURITY.md](SECURITY.md). First push should be an unmodified import of the
-upstream Terraform tree plus this solution (no assignment file). Then open the
-example PR from `example/function-app-ftps` (FTPS change only).
+upstream Terraform tree plus this solution (no assignment file). Merge
+`fix/agent-hardening` into the default branch before opening the example PR:
+`workflow_run` executes the agent from the **default branch**, so the hardened
+workflow and skills must land there first. Then open the example PR from
+`example/function-app-ftps` (FTPS change only, based on the hardened tip).
