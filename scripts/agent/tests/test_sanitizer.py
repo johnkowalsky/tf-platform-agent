@@ -28,4 +28,5 @@ def test_build_comment_includes_decision():
     )
     assert "update_tests" in comment
     assert "Checkov" in comment
+    assert "agent-terraform-junit" in comment
     assert "terraform-test-agent" in comment or "tf-platform-test-agent" in comment

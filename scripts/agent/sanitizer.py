@@ -48,6 +48,7 @@ def build_comment(
     findings: list[str],
     run_url: str,
     checkov_notes: list[str] | None = None,
+    junit_artifact: str = "agent-terraform-junit",
 ) -> str:
     lines = [
         MARKER,
@@ -60,6 +61,8 @@ def build_comment(
         "### Test results",
         "",
         test_summary or "_no tests run_",
+        "",
+        f"JUnit artifact (workflow): `{junit_artifact}`",
         "",
     ]
     if findings:

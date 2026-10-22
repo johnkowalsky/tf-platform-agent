@@ -49,9 +49,10 @@ results plus reviewer findings.
    *Gave up:* treating skills as prompt-only documentation.
 
 6. **Supply-chain gates after the agent path.** Actions are pinned to full SHAs.
-   zizmor, Scorecard, CodeQL, dependency-review, Dependabot, TFLint (pinned
-   release), and Checkov (with a committed baseline) are included. Agent pip
-   installs use `--require-hashes`.
+   TFLint comes from a pinned release zip verified by SHA-256 and the release
+   `checksums.txt`. Checkov runs via SHA-pinned `bridgecrewio/checkov-action`
+   with the committed baseline. Agent pip installs use `--require-hashes`.
+   Verify copies modules into `agent-output/sandbox/` (no `.git`).
    *Gave up:* egress `block` mode until a green run proves the host allowlist;
    SLSA provenance (nothing is released); auto-fixing Checkov findings in
    `main.tf`.
@@ -123,16 +124,21 @@ listed in the PR comment: `discover-changed-modules`, `author-terraform-tests`,
 
 ## Example run (designed demo)
 
-**Branch:** `example/function-app-ftps` — human change only:
-set `modules/function-app` `site_config.ftps_state` from `AllAllowed` to
-`Disabled`, leaving the existing FTPS assertion stale on purpose.
+Full walkthrough: [docs/example-run.md](docs/example-run.md).
+
+Open a same-repo PR that only changes
+`modules/function-app/main.tf` so `site_config.ftps_state` goes from
+`AllAllowed` to `Disabled`, and leave the FTPS assertion in
+`modules/function-app/tests/main.tftest.hcl` stale on purpose. Stale module
+tests fail the `module-tests` job (`continue-on-error`); as long as `static`
+passes, `terraform-test-agent` still runs.
 
 **Expected agent decisions after publish:**
 
 - discover → `function-app`
 - author → `update_tests` on `modules/function-app/tests/main.tftest.hcl`
-  (assertion becomes `Disabled`)
-- verify → `terraform test` passes
+  (assertion becomes `Disabled`; `override_data` for `build_info` kept)
+- verify → sandbox `terraform test` pass; JUnit artifact `agent-terraform-junit`
 - report → comment + check run; finding that
   `public_network_access_enabled` still defaults to `true`; Checkov baseline
   IDs for the module are listed for reviewers
@@ -140,9 +146,9 @@ set `modules/function-app` `site_config.ftps_state` from `AllAllowed` to
 **Skills used:** all four listed above.
 
 Until the repository is published and that example PR is opened against a remote
-with `LLM_API_KEY` set, this section describes the designed run. Local pytest
-and module `terraform test` prove the controls; they are not a substitute for
-the live PR.
+with `LLM_API_KEY` set, [docs/example-run.md](docs/example-run.md) is the
+defense record. Local pytest and module `terraform test` prove the controls;
+they are not a substitute for the live PR.
 
 ## What the tests can and cannot show
 
@@ -161,16 +167,20 @@ overriding them in tests; runtime behavior of the Function App.
 - An OpenAI-compatible Chat Completions API is available for authoring.
 - The publisher creates the public GitHub repository and emails the careers link.
 
-## Limitations
+## Limitations / residual risks
 
 - `GITHUB_TOKEN` pushes do not re-trigger `terraform-ci`; the check run is the
-  status on the bot commit.
+  status on the bot commit (no PAT loop).
 - Mocked apply is not used (provider ID validation).
 - Checkov baseline records known module findings; the agent does not “fix”
   infrastructure. The PR comment surfaces baseline IDs for touched modules.
-- harden-runner egress is `audit` until a host allowlist is proven.
-- `data.external` in module code under test still runs unless overridden in the
-  test file.
+- harden-runner egress stays `audit` until a host allowlist is proven; flip to
+  `block` in production.
+- Authored tests for modules with `data "external"` must include `override_data`
+  (enforced). Verify runs in a sandbox copy without `.git`; that still does not
+  replace network egress controls.
+- The recorded example in `docs/example-run.md` is not a live GitHub PR until
+  the operator publishes the repo and opens one.
 
 ## Scale (many modules, teams, repositories)
 
@@ -189,11 +199,13 @@ overriding them in tests; runtime behavior of the Function App.
 - Bot trailer plus verify-only re-run so branch protection sees a green
   `terraform-ci` on the bot commit without a looping PAT.
 
-## Publish checklist
+## Publish checklist (operator)
 
-See [SECURITY.md](SECURITY.md). First push should be an unmodified import of the
-upstream Terraform tree plus this solution (no assignment file). Merge
-`fix/agent-hardening` into the default branch before opening the example PR:
-`workflow_run` executes the agent from the **default branch**, so the hardened
-workflow and skills must land there first. Then open the example PR from
-`example/function-app-ftps` (FTPS change only, based on the hardened tip).
+See [SECURITY.md](SECURITY.md). Outside this codebase edit session:
+
+1. Publish the tree to a public GitHub repository (no assignment file).
+2. Ensure hardened workflows and `scripts/agent` are on the **default branch**
+   (`workflow_run` loads them from there).
+3. Set secret `LLM_API_KEY`; optional vars `LLM_BASE_URL`, `LLM_MODEL`.
+4. Replace `REPLACE_WITH_GITHUB_LOGIN` in CODEOWNERS; enable rulesets/scanning.
+5. Open one example PR per [docs/example-run.md](docs/example-run.md).

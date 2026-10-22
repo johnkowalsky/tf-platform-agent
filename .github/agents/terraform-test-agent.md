@@ -38,10 +38,11 @@ Forbidden: `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`, `stacks/**`,
 
 ## Verification
 
-The runner validates JSON against a schema, enforces the path allowlist, then
-runs allowlisted Terraform commands. A failing test restores previous files and
-is never committed. The model may retry a failing draft twice with the sanitized
-failure log.
+The runner validates JSON against a schema, enforces the path allowlist (and
+requires `override_data` when the module declares `data "external"`), then
+runs allowlisted Terraform commands in a sandbox copy of the module (no `.git`).
+A failing test restores previous files and is never committed. The model may
+retry a failing draft twice with the sanitized failure log.
 
 ## Findings
 

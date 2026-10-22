@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 MAX_TEST_FILE_BYTES = 64_000
 
 _TEST_PATH = re.compile(r"^modules/([^/]+)/tests/.+\.tftest\.hcl$")
+_EXTERNAL_DATA = re.compile(r'\bdata\s+"external"\s+"([^"]+)"')
 _FORBIDDEN_SUBSTRINGS = (
     "backend \"",
     "backend{",
@@ -37,7 +38,22 @@ def is_allowed_test_path(path: str, *, module: str | None = None) -> bool:
     return True
 
 
-def validate_test_hcl(content: str) -> list[str]:
+def module_external_data_names(module_root: Path) -> list[str]:
+    """Return data.external resource names declared under a module."""
+    names: list[str] = []
+    if not module_root.is_dir():
+        return names
+    for tf in sorted(module_root.glob("*.tf")):
+        text = tf.read_text(encoding="utf-8")
+        names.extend(_EXTERNAL_DATA.findall(text))
+    return names
+
+
+def validate_test_hcl(
+    content: str,
+    *,
+    required_external_overrides: list[str] | None = None,
+) -> list[str]:
     errors: list[str] = []
     if len(content.encode("utf-8")) > MAX_TEST_FILE_BYTES:
         errors.append(f"file exceeds {MAX_TEST_FILE_BYTES} bytes")
@@ -52,6 +68,14 @@ def validate_test_hcl(content: str) -> list[str]:
     for pattern in _FORBIDDEN_HCL:
         if pattern.search(content):
             errors.append(f"forbidden HCL pattern: {pattern.pattern}")
+    for name in required_external_overrides or []:
+        # Require override_data targeting data.external.<name>
+        needle = f"data.external.{name}"
+        if "override_data" not in content or needle not in content:
+            errors.append(
+                f'missing override_data for data.external.{name} '
+                "(module declares data \"external\")"
+            )
     return errors
 
 

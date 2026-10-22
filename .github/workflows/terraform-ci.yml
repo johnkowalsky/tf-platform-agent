@@ -64,9 +64,17 @@ jobs:
       - name: Install TFLint
         env:
           TFLINT_VERSION: v0.55.1
+          # sha256 of tflint_linux_amd64.zip from the same GitHub release checksums.txt
+          TFLINT_SHA256: 53379f38bc1e86c18885bfc85dc5fe2cd1f59729ae9a2afa16905189c1d67aa9
         run: |
           set -euo pipefail
-          curl -sSfL "https://raw.githubusercontent.com/terraform-linters/tflint/${TFLINT_VERSION}/install_linux.sh" | bash
+          base="https://github.com/terraform-linters/tflint/releases/download/${TFLINT_VERSION}"
+          curl -sSfL -o /tmp/tflint.zip "${base}/tflint_linux_amd64.zip"
+          curl -sSfL -o /tmp/tflint_checksums.txt "${base}/checksums.txt"
+          echo "${TFLINT_SHA256}  /tmp/tflint.zip" | sha256sum -c -
+          grep 'tflint_linux_amd64.zip$' /tmp/tflint_checksums.txt | (cd /tmp && sha256sum -c -)
+          unzip -o /tmp/tflint.zip -d /tmp
+          sudo install -m 0755 /tmp/tflint /usr/local/bin/tflint
           tflint --version
 
       - name: TFLint modules
@@ -89,9 +97,22 @@ jobs:
           PYTHONPATH=. python -m pytest -q tests/
 
       - name: Checkov
-        run: |
-          python -m pip install 'checkov==3.2.334'
-          checkov -d modules -d stacks --framework terraform --config-file .checkov.yaml --baseline .checkov.baseline
+        uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
+        with:
+          directory: modules
+          framework: terraform
+          config_file: .checkov.yaml
+          baseline: .checkov.baseline
+          soft_fail: false
+
+      - name: Checkov stacks
+        uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
+        with:
+          directory: stacks
+          framework: terraform
+          config_file: .checkov.yaml
+          baseline: .checkov.baseline
+          soft_fail: false
 
   module-tests:
     needs: static

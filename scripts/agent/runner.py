@@ -13,6 +13,7 @@ from typing import Any, Callable
 from discover import DiscoverResult, discover_changed_modules
 from findings import baseline_checkov_notes, collect_findings
 from llm import call_chat, parse_json_content
+from sandbox import is_sandbox_path, sandbox_module_copy
 from sanitizer import build_comment, sanitize_log
 from schema import validate_decision
 from terraform_cmds import test_module, validate_stack
@@ -129,16 +130,25 @@ def run_verification(
     skills = ["verify-terraform-tests"]
     lines: list[str] = []
     ok = True
+    sandbox_root = (junit_dir or (repo / "agent-output")) / "sandbox"
+    sandbox_root.mkdir(parents=True, exist_ok=True)
     for name in modules:
-        module_dir = repo / "modules" / name
+        module_dir = sandbox_module_copy(repo, name, sandbox_root=sandbox_root)
+        if not is_sandbox_path(module_dir, sandbox_root):
+            ok = False
+            lines.append(f"- `{name}` refused: verify cwd outside sandbox")
+            continue
         junit = None
         if junit_dir is not None:
             junit_dir.mkdir(parents=True, exist_ok=True)
-            junit = junit_dir / f"junit-{name}.xml"
+            # Absolute path so terraform (cwd=sandbox) writes outside the copy.
+            junit = (junit_dir / f"junit-{name}.xml").resolve()
         results = test_module(module_dir, junit_path=junit)
         for result in results:
             status = "pass" if result.ok else "FAIL"
-            lines.append(f"- `{name}` {' '.join(result.argv)} → {status}")
+            lines.append(
+                f"- `{name}` {' '.join(result.argv)} @ sandbox → {status}"
+            )
             if not result.ok:
                 ok = False
                 lines.append("```")
@@ -182,6 +192,7 @@ def skill_author(
     diff_excerpt: str,
     failure_context: str = "",
     allowed_modules: set[str],
+    repo: Path,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Skill: author-terraform-tests. Returns validated decision or errors."""
     system, user = _author_prompt(
@@ -194,7 +205,7 @@ def skill_author(
     )
     raw = chat_fn(system=system, user=user)
     parsed = parse_json_content(raw)
-    return validate_decision(parsed, allowed_modules=allowed_modules)
+    return validate_decision(parsed, allowed_modules=allowed_modules, repo=repo)
 
 
 def skill_verify(
@@ -219,6 +230,7 @@ def skill_report_payload(
     findings: list[str],
     run_url: str,
     checkov_notes: list[str],
+    junit_artifact: str = "agent-terraform-junit",
 ) -> str:
     """Skill: report-pr-findings — build sanitized comment body."""
     return build_comment(
@@ -229,6 +241,7 @@ def skill_report_payload(
         findings=findings,
         run_url=run_url,
         checkov_notes=checkov_notes,
+        junit_artifact=junit_artifact,
     )
 
 
@@ -290,6 +303,7 @@ def run_agent(
                 snapshot=_module_snapshot(repo, module),
                 diff_excerpt=diff_excerpt,
                 allowed_modules=allowed,
+                repo=repo,
             )
             if errors or validated is None:
                 decision_payload["summary"] = f"Rejected model output for {module}: {errors}"
@@ -339,6 +353,7 @@ def run_agent(
                         diff_excerpt=diff_excerpt,
                         failure_context=failure_context,
                         allowed_modules=allowed,
+                        repo=repo,
                     )
                     if errors or validated is None:
                         continue
@@ -413,6 +428,7 @@ def run_agent(
         findings=decision_payload.get("findings") or [],
         run_url=run_url,
         checkov_notes=checkov_notes,
+        junit_artifact="agent-terraform-junit",
     )
     decision_payload["comment"] = comment
     decision_payload["checkov_notes"] = checkov_notes

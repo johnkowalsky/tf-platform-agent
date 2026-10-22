@@ -1,4 +1,11 @@
-from allowlist import is_allowed_command, is_allowed_test_path, validate_test_hcl
+from pathlib import Path
+
+from allowlist import (
+    is_allowed_command,
+    is_allowed_test_path,
+    module_external_data_names,
+    validate_test_hcl,
+)
 
 
 def test_allows_module_test_path():
@@ -37,6 +44,28 @@ def test_hcl_rejects_apply_and_external():
     assert any("external" in e for e in validate_test_hcl(external))
     local = 'mock_provider "azurerm" {}\nresource "null_resource" "x" { provisioner "local-exec" { command = "id" } }\n'
     assert validate_test_hcl(local)
+
+
+def test_requires_override_data_for_module_external(tmp_path: Path):
+    module = tmp_path / "modules" / "function-app"
+    module.mkdir(parents=True)
+    (module / "main.tf").write_text(
+        'data "external" "build_info" { program = ["true"] }\n', encoding="utf-8"
+    )
+    names = module_external_data_names(module)
+    assert names == ["build_info"]
+    missing = 'mock_provider "azurerm" {}\nrun "x" { command = plan }\n'
+    errors = validate_test_hcl(missing, required_external_overrides=names)
+    assert any("override_data" in e for e in errors)
+    ok = (
+        'mock_provider "azurerm" {}\n'
+        "override_data {\n"
+        "  target = data.external.build_info\n"
+        '  values = { result = { revision = "x" } }\n'
+        "}\n"
+        'run "x" { command = plan }\n'
+    )
+    assert validate_test_hcl(ok, required_external_overrides=names) == []
 
 
 def test_commands():

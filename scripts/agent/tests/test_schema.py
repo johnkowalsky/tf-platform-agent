@@ -69,3 +69,29 @@ def test_rejects_undiscovered_module():
     result, errors = validate_decision(payload, allowed_modules={"function-app"})
     assert result is None
     assert any("discovered" in e for e in errors)
+
+
+def test_rejects_missing_override_when_module_has_external(tmp_path):
+    from pathlib import Path
+
+    module = Path(tmp_path) / "modules" / "function-app"
+    module.mkdir(parents=True)
+    (module / "main.tf").write_text(
+        'data "external" "build_info" { program = ["true"] }\n', encoding="utf-8"
+    )
+    payload = {
+        "decision": "update_tests",
+        "modules": [
+            {
+                "name": "function-app",
+                "action": "update_tests",
+                "path": "modules/function-app/tests/main.tftest.hcl",
+                "content": 'mock_provider "azurerm" {}\nrun "x" { command = plan }\n',
+            }
+        ],
+    }
+    result, errors = validate_decision(
+        payload, allowed_modules={"function-app"}, repo=Path(tmp_path)
+    )
+    assert result is None
+    assert any("override_data" in e for e in errors)

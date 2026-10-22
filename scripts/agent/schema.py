@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from allowlist import is_allowed_test_path, validate_test_hcl
+from allowlist import (
+    is_allowed_test_path,
+    module_external_data_names,
+    validate_test_hcl,
+)
 
 VALID_DECISIONS = frozenset({"skip", "update_tests", "comment_only"})
 
@@ -13,6 +18,7 @@ def validate_decision(
     payload: Any,
     *,
     allowed_modules: set[str] | None = None,
+    repo: Path | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     errors: list[str] = []
     if not isinstance(payload, dict):
@@ -54,7 +60,14 @@ def validate_decision(
             if not isinstance(content, str) or not content.strip():
                 errors.append(f"modules[{index}].content must be non-empty HCL")
             else:
-                hcl_errors = validate_test_hcl(content)
+                required_overrides: list[str] = []
+                if repo is not None:
+                    required_overrides = module_external_data_names(
+                        repo / "modules" / name
+                    )
+                hcl_errors = validate_test_hcl(
+                    content, required_external_overrides=required_overrides
+                )
                 errors.extend(f"modules[{index}]: {err}" for err in hcl_errors)
                 entry["content"] = content
         normalized_modules.append(entry)
