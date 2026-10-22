@@ -97,7 +97,7 @@ jobs:
           PYTHONPATH=. python -m pytest -q tests/
 
       - name: Checkov
-        uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
+        uses: bridgecrewio/checkov-action@6f26dc90000b74feb589a906cdfae540f5119895 # v12.3134.0
         with:
           directory: modules
           framework: terraform
@@ -106,7 +106,7 @@ jobs:
           soft_fail: false
 
       - name: Checkov stacks
-        uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
+        uses: bridgecrewio/checkov-action@6f26dc90000b74feb589a906cdfae540f5119895 # v12.3134.0
         with:
           directory: stacks
           framework: terraform
