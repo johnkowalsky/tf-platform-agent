@@ -1,16 +1,21 @@
 mock_provider "azurerm" {}
 
-# data.external runs the real build-info.sh during plan; mocked apply is not used
-# because that script is untrusted input from the module tree. Plan-time asserts
-# still cover the security-relevant configuration without Azure credentials.
+# Override data.external so plan never executes build-info.sh from the module tree.
+override_data {
+  target = data.external.build_info
+  values = {
+    result = {
+      revision = "test-rev"
+    }
+  }
+}
 
 variables {
-  name                          = "func-tp-test"
-  resource_group_name           = "rg-test"
-  location                      = "westeurope"
-  storage_account_name          = "sttptest001"
-  storage_account_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Storage/storageAccounts/sttptest001"
-  public_network_access_enabled = true
+  name                 = "func-tp-test"
+  resource_group_name  = "rg-test"
+  location             = "westeurope"
+  storage_account_name = "sttptest001"
+  storage_account_id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Storage/storageAccounts/sttptest001"
 }
 
 run "app_requires_https_and_tls12" {
@@ -36,6 +41,28 @@ run "ftps_state_is_all_allowed" {
   }
 }
 
+run "public_network_defaults_to_true" {
+  command = plan
+
+  assert {
+    condition     = azurerm_linux_function_app.this.public_network_access_enabled == true
+    error_message = "Default public_network_access_enabled must be true."
+  }
+}
+
+run "public_network_can_be_disabled" {
+  command = plan
+
+  variables {
+    public_network_access_enabled = false
+  }
+
+  assert {
+    condition     = azurerm_linux_function_app.this.public_network_access_enabled == false
+    error_message = "public_network_access_enabled must follow the variable."
+  }
+}
+
 run "uses_managed_identity_for_runtime_storage" {
   command = plan
 
@@ -56,5 +83,14 @@ run "service_plan_name_follows_convention" {
   assert {
     condition     = azurerm_service_plan.this.name == "asp-func-tp-test"
     error_message = "The service plan name must start with asp-."
+  }
+}
+
+run "build_revision_comes_from_override" {
+  command = plan
+
+  assert {
+    condition     = azurerm_linux_function_app.this.app_settings["BUILD_REVISION"] == "test-rev"
+    error_message = "BUILD_REVISION must come from the overridden external data source."
   }
 }

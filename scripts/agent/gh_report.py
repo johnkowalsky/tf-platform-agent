@@ -12,7 +12,7 @@ from pathlib import Path
 from sanitizer import MARKER, sanitize_comment
 
 
-def _api(method: str, url: str, payload: dict | None = None) -> dict:
+def _api(method: str, url: str, payload: dict | None = None) -> dict | list:
     token = os.environ["GITHUB_TOKEN"]
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
@@ -60,7 +60,7 @@ def upsert_comment(repo: str, pr_number: int, body: str) -> None:
         )
 
 
-def create_check_run(
+def upsert_check_run(
     repo: str,
     *,
     head_sha: str,
@@ -69,7 +69,22 @@ def create_check_run(
     summary: str,
     details_url: str = "",
 ) -> None:
-    payload = {
+    existing = _api(
+        "GET",
+        f"https://api.github.com/repos/{repo}/commits/{head_sha}/check-runs?per_page=100",
+    )
+    check_id = None
+    if isinstance(existing, dict):
+        for run in existing.get("check_runs") or []:
+            if run.get("name") == name and run.get("app") is None:
+                # Prefer our own check; Actions-created checks may lack a matching filter.
+                check_id = run.get("id")
+                break
+            if run.get("name") == name:
+                check_id = run.get("id")
+                break
+
+    payload: dict = {
         "name": name,
         "head_sha": head_sha,
         "status": "completed",
@@ -81,7 +96,11 @@ def create_check_run(
     }
     if details_url:
         payload["details_url"] = details_url
-    _api("POST", f"https://api.github.com/repos/{repo}/check-runs", payload)
+
+    if check_id:
+        _api("PATCH", f"https://api.github.com/repos/{repo}/check-runs/{check_id}", payload)
+    else:
+        _api("POST", f"https://api.github.com/repos/{repo}/check-runs", payload)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -106,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         conclusion = "failure"
 
-    create_check_run(
+    upsert_check_run(
         args.repo,
         head_sha=args.sha,
         name="terraform-test-agent",

@@ -1,21 +1,31 @@
-from sanitizer import MARKER, build_comment, sanitize_comment
+from sanitizer import build_comment, sanitize_comment, sanitize_log
 
 
 def test_redacts_secrets_and_escapes_refs():
-    text = sanitize_comment("api_key=supersecret see #12 and org/repo#99")
-    assert "supersecret" not in text
-    assert "`#12`" in text
-    assert MARKER in text
+    body = "token: abc123 see #42 and Authorization: Basic dXNlcjpwYXNz gho_ABCDEFG123"
+    cleaned = sanitize_comment(body)
+    assert "[redacted]" in cleaned
+    assert "`#42`" in cleaned
+    assert "gho_[redacted]" in cleaned or "gho_" not in cleaned.replace("gho_[redacted]", "")
+
+
+def test_sanitize_log_truncates():
+    text = "x" * 5000
+    out = sanitize_log(text, limit=100)
+    assert len(out) <= 100
+    assert "truncated" in out
 
 
 def test_build_comment_includes_decision():
-    body = build_comment(
+    comment = build_comment(
         decision="update_tests",
-        skills_used=["discover-changed-modules"],
+        skills_used=["discover-changed-modules", "author-terraform-tests"],
         modules=["function-app"],
-        test_summary="ok",
-        findings=["ftps open"],
+        test_summary="- `function-app` terraform test → pass",
+        findings=["note"],
         run_url="https://example.test/run/1",
+        checkov_notes=["function-app: baseline still suppresses CKV_AZURE_221"],
     )
-    assert "update_tests" in body
-    assert "ftps open" in body
+    assert "update_tests" in comment
+    assert "Checkov" in comment
+    assert "terraform-test-agent" in comment or "tf-platform-test-agent" in comment

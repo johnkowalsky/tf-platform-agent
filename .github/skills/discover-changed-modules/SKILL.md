@@ -4,14 +4,19 @@
 
 Map a pull request diff to Terraform modules that may need test updates.
 
+## Implementation
+
+Executed by `discover.discover_changed_modules` / `runner.skill_discover`.
+
 ## Steps
 
 1. Read the list of changed files for the pull request (base…head).
-2. Collect unique module names under `modules/<name>/` when any `.tf` or
-   `tests/**/*.tftest.hcl` file changed.
+2. Collect unique module names under `modules/<name>/` when any `.tf` file or
+   any file under `tests/` changed.
 3. Mark stack-only (`stacks/**`) or docs-only changes as non-module.
-4. If the latest commit message is `test-agent: update tests`, mark the run as
-   verify-only so the agent does not author again.
+4. Set `verify_only` only when the latest commit message starts with
+   `test-agent: update tests` **and** every non-docs path is an allowlisted
+   `modules/<name>/tests/**/*.tftest.hcl` file.
 
 ## Output
 

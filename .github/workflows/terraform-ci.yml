@@ -1,4 +1,6 @@
 # Secret-free PR checks. No LLM key. No Azure credentials.
+# Static jobs are the hard gate. Module tests use continue-on-error so a
+# stale tftest still completes the workflow and can wake terraform-test-agent.
 name: terraform-ci
 
 on:
@@ -24,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  terraform:
+  static:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -60,8 +62,11 @@ jobs:
         run: terraform fmt -check -recursive
 
       - name: Install TFLint
+        env:
+          TFLINT_VERSION: v0.55.1
         run: |
-          curl -sSfL https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+          set -euo pipefail
+          curl -sSfL "https://raw.githubusercontent.com/terraform-linters/tflint/${TFLINT_VERSION}/install_linux.sh" | bash
           tflint --version
 
       - name: TFLint modules
@@ -77,16 +82,6 @@ jobs:
           terraform init -backend=false
           terraform validate
 
-      - name: Test modules
-        run: |
-          set -euo pipefail
-          mkdir -p agent-output
-          for dir in modules/*; do
-            name=$(basename "$dir")
-            echo "==> $name"
-            (cd "$dir" && terraform init -backend=false && terraform test -junit-xml="../../agent-output/junit-${name}.xml")
-          done
-
       - name: Agent unit tests
         working-directory: scripts/agent
         run: |
@@ -97,6 +92,52 @@ jobs:
         run: |
           python -m pip install 'checkov==3.2.334'
           checkov -d modules -d stacks --framework terraform --config-file .checkov.yaml --baseline .checkov.baseline
+
+  module-tests:
+    needs: static
+    runs-on: ubuntu-latest
+    # Stale module tests must not block workflow_run from starting the agent.
+    continue-on-error: true
+    permissions:
+      contents: read
+    env:
+      ARM_CLIENT_ID: ""
+      ARM_CLIENT_SECRET: ""
+      ARM_SUBSCRIPTION_ID: ""
+      ARM_TENANT_ID: ""
+      ARM_ACCESS_KEY: ""
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@cb605e52c26070c328afc4562f0b4ada7618a84e # v2.10.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.11.4
+          terraform_wrapper: false
+
+      - name: Test modules
+        id: tests
+        run: |
+          set -euo pipefail
+          mkdir -p agent-output
+          failed=0
+          for dir in modules/*; do
+            name=$(basename "$dir")
+            echo "==> $name"
+            if ! (cd "$dir" && terraform init -backend=false && terraform test -junit-xml="../../agent-output/junit-${name}.xml"); then
+              failed=1
+            fi
+          done
+          echo "failed=${failed}" >> "$GITHUB_OUTPUT"
+          exit "${failed}"
 
       - name: Upload JUnit
         if: always()

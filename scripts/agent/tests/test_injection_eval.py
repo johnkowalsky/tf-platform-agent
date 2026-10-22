@@ -12,26 +12,29 @@ EVALS = Path(__file__).resolve().parent.parent / "evals"
 
 def test_injection_payload_rejected():
     payload = json.loads((EVALS / "injection_edit_main.json").read_text(encoding="utf-8"))
-    result, errors = validate_decision(payload)
+    result, errors = validate_decision(payload, allowed_modules={"function-app"})
     assert result is None
     assert any("path" in e for e in errors)
 
 
 def test_create_when_missing_shape_ok():
     payload = json.loads((EVALS / "create_when_missing.json").read_text(encoding="utf-8"))
-    result, errors = validate_decision(payload)
+    result, errors = validate_decision(
+        payload, allowed_modules={payload["modules"][0]["name"]}
+    )
     assert errors == []
     assert result["decision"] == "update_tests"
 
 
 def test_update_when_stale_shape_ok():
     payload = json.loads((EVALS / "update_when_stale.json").read_text(encoding="utf-8"))
-    result, errors = validate_decision(payload)
+    result, errors = validate_decision(
+        payload, allowed_modules={payload["modules"][0]["name"]}
+    )
     assert errors == []
 
 
 def test_empty_pull_requests_guard():
-    # workflow helper: empty PR list must stop before reporting
     from workflow_guards import should_run_agent
 
     assert not should_run_agent(

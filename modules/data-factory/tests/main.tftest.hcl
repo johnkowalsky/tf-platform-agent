@@ -4,7 +4,6 @@ variables {
   name                       = "adf-tp-test"
   resource_group_name        = "rg-test"
   location                   = "westeurope"
-  public_network_enabled     = true
   log_analytics_workspace_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.OperationalInsights/workspaces/log-test"
   linked_storage_accounts = {
     raw = "https://sttptest001.dfs.core.windows.net/"
@@ -46,13 +45,34 @@ run "diagnostic_setting_targets_pipeline_and_activity_runs" {
     condition     = azurerm_monitor_diagnostic_setting.this.name == "diag-adf-tp-test"
     error_message = "Diagnostic setting name must follow diag-<factory-name>."
   }
+
+  assert {
+    condition = length([
+      for log in azurerm_monitor_diagnostic_setting.this.enabled_log : log
+      if log.category == "PipelineRuns" || log.category == "ActivityRuns"
+    ]) == 2
+    error_message = "Diagnostics must enable PipelineRuns and ActivityRuns."
+  }
 }
 
-run "public_network_follows_the_variable" {
+run "public_network_defaults_to_true" {
   command = plan
 
   assert {
     condition     = azurerm_data_factory.this.public_network_enabled == true
-    error_message = "public_network_enabled must match the variable."
+    error_message = "Default public_network_enabled must be true."
+  }
+}
+
+run "public_network_can_be_disabled" {
+  command = plan
+
+  variables {
+    public_network_enabled = false
+  }
+
+  assert {
+    condition     = azurerm_data_factory.this.public_network_enabled == false
+    error_message = "public_network_enabled must follow the variable."
   }
 }

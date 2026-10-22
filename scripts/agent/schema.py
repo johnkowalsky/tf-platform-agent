@@ -9,7 +9,11 @@ from allowlist import is_allowed_test_path, validate_test_hcl
 VALID_DECISIONS = frozenset({"skip", "update_tests", "comment_only"})
 
 
-def validate_decision(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
+def validate_decision(
+    payload: Any,
+    *,
+    allowed_modules: set[str] | None = None,
+) -> tuple[dict[str, Any] | None, list[str]]:
     errors: list[str] = []
     if not isinstance(payload, dict):
         return None, ["decision must be a JSON object"]
@@ -34,12 +38,17 @@ def validate_decision(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
         if not isinstance(name, str) or not name or "/" in name or ".." in name:
             errors.append(f"modules[{index}].name is invalid")
             continue
+        if allowed_modules is not None and name not in allowed_modules:
+            errors.append(f"modules[{index}].name is not among discovered modules")
+            continue
         entry: dict[str, Any] = {"name": name, "action": item.get("action", decision)}
         if entry["action"] == "update_tests":
             path = item.get("path")
             content = item.get("content")
-            if not isinstance(path, str) or not is_allowed_test_path(path):
-                errors.append(f"modules[{index}].path is not an allowed test path")
+            if not isinstance(path, str) or not is_allowed_test_path(path, module=name):
+                errors.append(
+                    f"modules[{index}].path must be under modules/{name}/tests/"
+                )
             else:
                 entry["path"] = path.replace("\\", "/").lstrip("./")
             if not isinstance(content, str) or not content.strip():

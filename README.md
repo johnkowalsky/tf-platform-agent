@@ -38,6 +38,14 @@ terraform validate
 
 The stack has no backend configured. A real deployment would need one, and credentials for it.
 
+## Pull request test agent
+
+On same-repo pull requests that change `modules/` or the stack, `terraform-ci`
+runs secret-free checks. After that workflow finishes with a successful `static`
+job, `terraform-test-agent` (from the default branch) may create or update
+`modules/*/tests/**/*.tftest.hcl`, verify with `terraform test`, and report on
+the same PR. See [SOLUTION.md](SOLUTION.md) and [SECURITY.md](SECURITY.md).
+
 ## Conventions
 
 - Resource files in a stack and modules use `main.tf`, `variables.tf`, `outputs.tf` and `versions.tf`.

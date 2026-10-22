@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from allowlist import is_allowed_command
+from sanitizer import sanitize_log
 
 AZURE_ENV_KEYS = (
     "ARM_CLIENT_ID",
@@ -30,6 +31,10 @@ class CommandResult:
     def ok(self) -> bool:
         return self.returncode == 0
 
+    @property
+    def sanitized_failure(self) -> str:
+        return sanitize_log((self.stderr or self.stdout)[-4000:])
+
 
 def scrubbed_env(base: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(base if base is not None else os.environ)
@@ -37,7 +42,6 @@ def scrubbed_env(base: dict[str, str] | None = None) -> dict[str, str]:
         env.pop(key, None)
     env.pop("LLM_API_KEY", None)
     env.pop("OPENAI_API_KEY", None)
-    # Avoid leaking Actions token into terraform/external scripts
     env.pop("GITHUB_TOKEN", None)
     env.pop("GH_TOKEN", None)
     return env
@@ -76,6 +80,9 @@ def test_module(module_dir: Path, *, junit_path: Path | None = None) -> list[Com
 
 def validate_stack(stack_dir: Path) -> list[CommandResult]:
     results = [run_terraform(["terraform", "init", "-backend=false"], cwd=stack_dir)]
+    if not results[-1].ok:
+        return results
+    results.append(run_terraform(["terraform", "fmt", "-check"], cwd=stack_dir))
     if not results[-1].ok:
         return results
     results.append(run_terraform(["terraform", "validate"], cwd=stack_dir))

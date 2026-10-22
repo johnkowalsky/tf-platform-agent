@@ -46,3 +46,21 @@ run "omits_dns_zone_group_when_zone_is_null" {
     error_message = "No DNS zone group should be created when private_dns_zone_id is null."
   }
 }
+
+run "attaches_dns_zone_group_when_zone_is_set" {
+  command = plan
+
+  variables {
+    private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+  }
+
+  assert {
+    condition     = length(azurerm_private_endpoint.this.private_dns_zone_group) == 1
+    error_message = "A DNS zone group must be created when private_dns_zone_id is set."
+  }
+
+  assert {
+    condition     = azurerm_private_endpoint.this.private_dns_zone_group[0].private_dns_zone_ids[0] == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+    error_message = "The DNS zone group must reference the provided zone id."
+  }
+}

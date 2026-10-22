@@ -3,6 +3,15 @@ from allowlist import is_allowed_command, is_allowed_test_path, validate_test_hc
 
 def test_allows_module_test_path():
     assert is_allowed_test_path("modules/function-app/tests/main.tftest.hcl")
+    assert is_allowed_test_path(
+        "modules/function-app/tests/main.tftest.hcl", module="function-app"
+    )
+
+
+def test_rejects_other_module_path():
+    assert not is_allowed_test_path(
+        "modules/storage-account/tests/main.tftest.hcl", module="function-app"
+    )
 
 
 def test_rejects_main_tf():
@@ -19,6 +28,15 @@ def test_hcl_rejects_backend():
     content = 'mock_provider "azurerm" {}\nterraform { backend "azurerm" {} }\n'
     errors = validate_test_hcl(content)
     assert errors
+
+
+def test_hcl_rejects_apply_and_external():
+    apply = 'mock_provider "azurerm" {}\nrun "x" { command = apply }\n'
+    assert any("apply" in e for e in validate_test_hcl(apply))
+    external = 'mock_provider "azurerm" {}\ndata "external" "x" { program = ["true"] }\n'
+    assert any("external" in e for e in validate_test_hcl(external))
+    local = 'mock_provider "azurerm" {}\nresource "null_resource" "x" { provisioner "local-exec" { command = "id" } }\n'
+    assert validate_test_hcl(local)
 
 
 def test_commands():
